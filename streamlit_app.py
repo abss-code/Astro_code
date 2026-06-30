@@ -1,151 +1,89 @@
-import streamlit as st
-import pandas as pd
-import math
-from pathlib import Path
+# 1. INSTALAÇÃO DAS FERRAMENTAS E DO CLOUDFLARE
+print("Instalando dependências... Aguarde.")
+!pip install -q streamlit plotly numpy
+!wget -q https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64.deb
+!dpkg -i cloudflared-linux-amd64.deb > /dev/null
 
-# Set the title and favicon that appear in the Browser's tab bar.
-st.set_page_config(
-    page_title='GDP dashboard',
-    page_icon=':earth_americas:', # This is an emoji shortcode. Could be a URL too.
+# 2. CRIAÇÃO DO ARQUIVO DO SIMULADOR (app.py) COM GAIOLA ESFÉRICA 3D
+print("Criando o aplicativo do simulador...")
+with open("app.py", "w") as f:
+    f.write('''import streamlit as st
+import numpy as np
+import plotly.graph_objects as go
+
+st.set_page_config(layout="wide")
+st.title("🌌 Simulador de Sistema Planetário 3D")
+
+st.sidebar.header("Parâmetros do Sistema")
+sistema = st.sidebar.selectbox("Escolha o Sistema:", ["LHS 1140", "Personalizado"])
+
+if sistema == "LHS 1140":
+    raio_c = 0.0270
+    raio_b = 0.0936
+    hz_interna = 0.063
+    hz_externa = 0.091
+else:
+    raio_c = st.sidebar.slider("Órbita Planeta C (UA)", 0.01, 0.2, 0.03)
+    raio_b = st.sidebar.slider("Órbita Planeta B (UA)", 0.05, 0.5, 0.10)
+    hz_interna = st.sidebar.slider("Início da Zona Habitável (UA)", 0.01, 0.3, 0.06)
+    hz_externa = st.sidebar.slider("Fim da Zona Habitável (UA)", 0.05, 0.5, 0.09)
+
+theta = np.linspace(0, 2 * np.pi, 200)
+fig = go.Figure()
+
+# 1. Estrela Central
+fig.add_trace(go.Scatter3d(
+    x=[0], y=[0], z=[0], mode='markers',
+    marker=dict(size=14, color='orange', symbol='circle'), name="Estrela"
+))
+
+# 2. Órbita C (Plano Z = 0)
+fig.add_trace(go.Scatter3d(
+    x=raio_c * np.cos(theta), y=raio_c * np.sin(theta), z=np.zeros_like(theta),
+    mode='lines', line=dict(color='lightgreen', width=3, dash='dash'), name="LHS 1140 c"
+))
+
+# 3. Órbita B (Plano Z = 0)
+fig.add_trace(go.Scatter3d(
+    x=raio_b * np.cos(theta), y=raio_b * np.sin(theta), z=np.zeros_like(theta),
+    mode='lines', line=dict(color='coral', width=3), name="LHS 1140 b"
+))
+
+# 4. Construção da Zona Habitável Esférica (Gaiola de Anéis Volumétricos)
+# Desenha camadas em várias latitudes para formar uma casca esférica visível de todos os lados
+raio_hz = (hz_interna + hz_externa) / 2
+camadas_z = np.linspace(-raio_hz * 0.9, raio_hz * 0.9, 15)
+
+for z in camadas_z:
+    # Ajusta o raio do anel para cada altura Z usando Pitágoras para manter esférico
+    raio_anel = np.sqrt(max(0, raio_hz**2 - z**2))
+    fig.add_trace(go.Scatter3d(
+        x=raio_anel * np.cos(theta), y=raio_anel * np.sin(theta), z=np.ones_like(theta) * z,
+        mode='lines', line=dict(color='rgba(46, 139, 87, 0.25)', width=2),
+        showlegend=False
+    ))
+
+# Legenda bonitinha para a Esfera Habitável
+fig.add_trace(go.Scatter3d(
+    x=[None], y=[None], z=[None], mode='lines',
+    line=dict(color='rgba(46, 139, 87, 0.7)', width=6), name="Zona Habitável (Esfera)"
+))
+
+# Ajustes de Layout e proporções estritas de Cubo 1:1:1
+fig.update_layout(
+    template="plotly_dark",
+    scene=dict(
+        xaxis=dict(title='X (UA)', range=[-0.12, 0.12]),
+        yaxis=dict(title='Y (UA)', range=[-0.12, 0.12]),
+        zaxis=dict(title='Z (UA)', range=[-0.12, 0.12]),
+        aspectmode='cube'  # Força os eixos a terem comprimentos visuais idênticos
+    ),
+    margin=dict(l=0, r=0, b=0, t=40), height=650
 )
 
-# -----------------------------------------------------------------------------
-# Declare some useful functions.
+st.plotly_chart(fig, use_container_width=True)
+''')
 
-@st.cache_data
-def get_gdp_data():
-    """Grab GDP data from a CSV file.
-
-    This uses caching to avoid having to read the file every time. If we were
-    reading from an HTTP endpoint instead of a file, it's a good idea to set
-    a maximum age to the cache with the TTL argument: @st.cache_data(ttl='1d')
-    """
-
-    # Instead of a CSV on disk, you could read from an HTTP endpoint here too.
-    DATA_FILENAME = Path(__file__).parent/'data/gdp_data.csv'
-    raw_gdp_df = pd.read_csv(DATA_FILENAME)
-
-    MIN_YEAR = 1960
-    MAX_YEAR = 2022
-
-    # The data above has columns like:
-    # - Country Name
-    # - Country Code
-    # - [Stuff I don't care about]
-    # - GDP for 1960
-    # - GDP for 1961
-    # - GDP for 1962
-    # - ...
-    # - GDP for 2022
-    #
-    # ...but I want this instead:
-    # - Country Name
-    # - Country Code
-    # - Year
-    # - GDP
-    #
-    # So let's pivot all those year-columns into two: Year and GDP
-    gdp_df = raw_gdp_df.melt(
-        ['Country Code'],
-        [str(x) for x in range(MIN_YEAR, MAX_YEAR + 1)],
-        'Year',
-        'GDP',
-    )
-
-    # Convert years from string to integers
-    gdp_df['Year'] = pd.to_numeric(gdp_df['Year'])
-
-    return gdp_df
-
-gdp_df = get_gdp_data()
-
-# -----------------------------------------------------------------------------
-# Draw the actual page
-
-# Set the title that appears at the top of the page.
-'''
-# :earth_americas: GDP dashboard
-
-Browse GDP data from the [World Bank Open Data](https://data.worldbank.org/) website. As you'll
-notice, the data only goes to 2022 right now, and datapoints for certain years are often missing.
-But it's otherwise a great (and did I mention _free_?) source of data.
-'''
-
-# Add some spacing
-''
-''
-
-min_value = gdp_df['Year'].min()
-max_value = gdp_df['Year'].max()
-
-from_year, to_year = st.slider(
-    'Which years are you interested in?',
-    min_value=min_value,
-    max_value=max_value,
-    value=[min_value, max_value])
-
-countries = gdp_df['Country Code'].unique()
-
-if not len(countries):
-    st.warning("Select at least one country")
-
-selected_countries = st.multiselect(
-    'Which countries would you like to view?',
-    countries,
-    ['DEU', 'FRA', 'GBR', 'BRA', 'MEX', 'JPN'])
-
-''
-''
-''
-
-# Filter the data
-filtered_gdp_df = gdp_df[
-    (gdp_df['Country Code'].isin(selected_countries))
-    & (gdp_df['Year'] <= to_year)
-    & (from_year <= gdp_df['Year'])
-]
-
-st.header('GDP over time', divider='gray')
-
-''
-
-st.line_chart(
-    filtered_gdp_df,
-    x='Year',
-    y='GDP',
-    color='Country Code',
-)
-
-''
-''
-
-
-first_year = gdp_df[gdp_df['Year'] == from_year]
-last_year = gdp_df[gdp_df['Year'] == to_year]
-
-st.header(f'GDP in {to_year}', divider='gray')
-
-''
-
-cols = st.columns(4)
-
-for i, country in enumerate(selected_countries):
-    col = cols[i % len(cols)]
-
-    with col:
-        first_gdp = first_year[first_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-        last_gdp = last_year[last_year['Country Code'] == country]['GDP'].iat[0] / 1000000000
-
-        if math.isnan(first_gdp):
-            growth = 'n/a'
-            delta_color = 'off'
-        else:
-            growth = f'{last_gdp / first_gdp:,.2f}x'
-            delta_color = 'normal'
-
-        st.metric(
-            label=f'{country} GDP',
-            value=f'{last_gdp:,.0f}B',
-            delta=growth,
-            delta_color=delta_color
-        )
+# 3. INICIALIZAÇÃO DO SERVIDOR E DO TÚNEL
+print("\nIniciando o servidor... Procure pelo link '.trycloudflare.com' abaixo e clique nele!\n")
+!streamlit run app.py & cloudflared tunnel --url http://localhost:8501
